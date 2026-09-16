@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Question Paper Management</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f4f4;
+            margin: 0;
+        }
+
+        header {
+            background: #222;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .container {
+            width: 95%;
+            margin: 30px auto;
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+        }
+
+        .user-info {
+            padding: 15px;
+            background: #f1f1f1;
+            margin-bottom: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th, td {
+            border: 1px solid #ccc;
+            padding: 12px;
+            text-align: left;
+        }
+
+        th {
+            background: #ddd;
+        }
+
+        input {
+            padding: 8px;
+            border: 1px solid #aaa;
+            border-radius: 4px;
+        }
+
+        button {
+            padding: 8px 12px;
+            background: #222;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #444;
+        }
+
+        .approve {
+            color: green;
+            font-weight: bold;
+        }
+
+        .pending {
+            color: #b36b00;
+            font-weight: bold;
+        }
+
+        .scheduled {
+            color: #555;
+            font-weight: bold;
+        }
+
+        .released {
+            color: green;
+            font-weight: bold;
+        }
+
+        .back {
+            display: inline-block;
+            margin-top: 20px;
+            color: #222;
+            text-decoration: none;
+        }
+    </style>
+</head>
+
+<body>
+
+<header>
+    <h1>Question Paper Management</h1>
+</header>
+
+<div class="container">
+
+    <div class="user-info">
+        <strong>Logged in User:</strong> {{ username }}
+        <br>
+        <strong>Role:</strong> {{ role }}
+    </div>
+
+    <h2>Manage Question Papers</h2>
+
+    <table>
+
+        <tr>
+            <th>ID</th>
+            <th>Question Paper</th>
+            <th>Uploaded Time</th>
+            <th>Integrity Hash</th>
+            <th>Status</th>
+            <th>Action</th>
+        </tr>
+
+        {% for paper in papers %}
+
+        <tr>
+
+            <td>
+                {{ paper["id"] }}
+            </td>
+
+            <td>
+                {{ paper["title"] }}
+            </td>
+
+            <td>
+                {{ paper["upload_time"] }}
+            </td>
+
+            <td>
+                {{ paper["sha256_hash"][:16] }}...
+            </td>
+
+            <td>
+
+                {% if paper["status"] == "Pending" %}
+
+                    <span class="pending">
+                        Pending
+                    </span>
+
+                {% elif paper["status"] == "Approved" %}
+
+                    <span class="approve">
+                        Approved
+                    </span>
+
+                {% elif paper["status"] == "Scheduled" %}
+
+                    <span class="scheduled">
+                        Scheduled
+                    </span>
+
+                {% elif paper["status"] == "Released" %}
+
+                    <span class="released">
+                        Released
+                    </span>
+
+                {% endif %}
+
+            </td>
+
+            <td>
+
+                {% if role == "Officer" or role == "Admin" %}
+
+                    {% if paper["status"] == "Pending" %}
+
+                        <a href="/approve/{{ paper['id'] }}">
+                            <button>
+                                Approve
+                            </button>
+                        </a>
+
+                    {% else %}
+
+                        No Action
+
+                    {% endif %}
+
+                {% endif %}
+
+
+                {% if role == "Controller" or role == "Admin" %}
+
+                    {% if paper["status"] == "Approved" %}
+
+                        <form
+                            method="POST"
+                            action="/schedule/{{ paper['id'] }}"
+                        >
+
+                            <input
+                                type="datetime-local"
+                                name="release_time"
+                                required
+                            >
+
+                            <button type="submit">
+                                Schedule Release
+                            </button>
+
+                        </form>
+
+                    {% elif paper["status"] == "Scheduled" %}
+
+                        Release Time:
+                        {{ paper["release_time"] }}
+
+                    {% else %}
+
+                        No Action
+
+                    {% endif %}
+
+                {% endif %}
+
+            </td>
+
+        </tr>
+
+        {% else %}
+
+        <tr>
+            <td colspan="6">
+                No question papers available.
+            </td>
+        </tr>
+
+        {% endfor %}
+
+    </table>
+
+    <a class="back" href="/dashboard">
+        ← Back to Dashboard
+    </a>
+
+</div>
+
+</body>
+</html>
