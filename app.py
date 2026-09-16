@@ -7,7 +7,7 @@ import sqlite3
 import os
 import hashlib
 
-app = Flask(_name_)
+app = Flask(__name__)
 
 # --------------------------------------------------
 # CONFIGURATION
