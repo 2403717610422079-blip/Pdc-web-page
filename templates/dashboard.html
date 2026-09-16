@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Secure Question Paper Dashboard</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f4f4;
+            margin: 0;
+        }
+
+        header {
+            background: #222;
+            color: white;
+            padding: 20px;
+        }
+
+        .container {
+            width: 90%;
+            margin: 30px auto;
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+        }
+
+        .top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .button {
+            background: #222;
+            color: white;
+            padding: 10px 15px;
+            text-decoration: none;
+            border-radius: 5px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 25px;
+        }
+
+        th, td {
+            border: 1px solid #ccc;
+            padding: 12px;
+            text-align: left;
+        }
+
+        th {
+            background: #eee;
+        }
+
+        .status {
+            font-weight: bold;
+        }
+
+        .security {
+            margin-top: 25px;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+
+<body>
+
+<header>
+    <h1>Secure Question Paper Management System</h1>
+</header>
+
+<div class="container">
+
+    <div class="top">
+
+        <div>
+            <h2>Dashboard</h2>
+
+            <p>
+                Welcome,
+                <strong>{{ username }}</strong>
+            </p>
+
+            <p>
+                Role:
+                <strong>{{ role }}</strong>
+            </p>
+        </div>
+
+        <div>
+            <a class="button" href="/logout">Logout</a>
+        </div>
+
+    </div>
+
+    <hr>
+
+    {% if role == "Question Setter" or role == "Admin" %}
+
+        <p>
+            <a class="button" href="/upload">
+                Upload Question Paper
+            </a>
+        </p>
+
+    {% endif %}
+
+    {% if role == "Officer" or role == "Controller" or role == "Admin" %}
+
+        <p>
+            <a class="button" href="/admin/papers">
+                Manage Question Papers
+            </a>
+        </p>
+
+    {% endif %}
+
+    <h2>Question Papers</h2>
+
+    <table>
+
+        <tr>
+            <th>Paper ID</th>
+            <th>Title</th>
+            <th>Status</th>
+            <th>Release Time</th>
+            <th>Action</th>
+        </tr>
+
+        {% for paper in papers %}
+
+        <tr>
+
+            <td>
+                {{ paper["id"] }}
+            </td>
+
+            <td>
+                {{ paper["title"] }}
+            </td>
+
+            <td class="status">
+                {{ paper["status"] }}
+            </td>
+
+            <td>
+                {{ paper["release_time"] or "Not Scheduled" }}
+            </td>
+
+            <td>
+
+                {% if paper["status"] == "Released" %}
+
+                    <a href="/view/{{ paper['id'] }}">
+                        View
+                    </a>
+
+                    &nbsp; | &nbsp;
+
+                    <a href="/download/{{ paper['id'] }}">
+                        Download
+                    </a>
+
+                {% else %}
+
+                    Not Released
+
+                {% endif %}
+
+            </td>
+
+        </tr>
+
+        {% else %}
+
+        <tr>
+            <td colspan="5">
+                No question papers available.
+            </td>
+        </tr>
+
+        {% endfor %}
+
+    </table>
+
+    <div class="security">
+
+        <h3>Security Controls</h3>
+
+        <ul>
+            <li>Authenticated access</li>
+            <li>Role-based access control</li>
+            <li>Secure question paper storage</li>
+            <li>SHA-256 integrity verification</li>
+            <li>Controlled release</li>
+            <li>Audit monitoring</li>
+        </ul>
+
+    </div>
+
+</div>
+
+</body>
+</html>
