@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, url_for, session, send_file, render_template_string, flash
+from flask import Flask, request, redirect, url_for, session, send_file, render_template, flash
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from functools import wraps
@@ -9,19 +9,24 @@ import hashlib
 
 app = Flask(_name_)
 
-# Secret key for secure sessions
-app.secret_key = os.environ.get("SECRET_KEY", "change-this-secret-key")
+# --------------------------------------------------
+# CONFIGURATION
+# --------------------------------------------------
 
-# Configuration
+app.secret_key = os.environ.get(
+    "SECRET_KEY",
+    "secure-question-paper-secret-key"
+)
+
 DATABASE = "question_paper.db"
 UPLOAD_FOLDER = "secure_papers"
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
-# ---------------------------------------------------------
-# DATABASE
-# ---------------------------------------------------------
+# --------------------------------------------------
+# DATABASE CONNECTION
+# --------------------------------------------------
 
 def get_db():
     conn = sqlite3.connect(DATABASE)
@@ -29,7 +34,12 @@ def get_db():
     return conn
 
 
+# --------------------------------------------------
+# INITIALIZE DATABASE
+# --------------------------------------------------
+
 def init_db():
+
     conn = get_db()
 
     conn.execute("""
@@ -65,8 +75,8 @@ def init_db():
         )
     """)
 
-    # Demo users
-    users = [
+    # Demo accounts
+    demo_users = [
         ("admin", "admin123", "Admin"),
         ("setter", "setter123", "Question Setter"),
         ("officer", "officer123", "Officer"),
@@ -74,75 +84,100 @@ def init_db():
         ("student", "student123", "Candidate")
     ]
 
-    for username, password, role in users:
+    for username, password, role in demo_users:
+
         existing = conn.execute(
             "SELECT id FROM users WHERE username = ?",
             (username,)
         ).fetchone()
 
         if not existing:
+
             conn.execute(
-                "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-                (username, generate_password_hash(password), role)
+                """
+                INSERT INTO users
+                (username, password, role)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    username,
+                    generate_password_hash(password),
+                    role
+                )
             )
 
     conn.commit()
     conn.close()
 
 
-# ---------------------------------------------------------
-# AUDIT LOG
-# ---------------------------------------------------------
+# --------------------------------------------------
+# AUDIT LOGGING
+# --------------------------------------------------
 
 def log_action(action, paper_id=None):
-    if "username" not in session:
-        return
+
+    username = session.get("username", "Unknown")
 
     conn = get_db()
 
-    conn.execute("""
+    conn.execute(
+        """
         INSERT INTO audit_logs
         (username, action, paper_id, timestamp)
         VALUES (?, ?, ?, ?)
-    """, (
-        session["username"],
-        action,
-        paper_id,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ))
+        """,
+        (
+            username,
+            action,
+            paper_id,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        )
+    )
 
     conn.commit()
     conn.close()
 
 
-# ---------------------------------------------------------
+# --------------------------------------------------
 # LOGIN REQUIRED
-# ---------------------------------------------------------
+# --------------------------------------------------
 
 def login_required(function):
+
     @wraps(function)
     def wrapper(*args, **kwargs):
+
         if "user_id" not in session:
             return redirect(url_for("login"))
+
         return function(*args, **kwargs)
 
     return wrapper
 
 
-# ---------------------------------------------------------
-# ROLE CHECK
-# ---------------------------------------------------------
+# --------------------------------------------------
+# ROLE BASED ACCESS CONTROL
+# --------------------------------------------------
 
-def role_required(*roles):
+def role_required(*allowed_roles):
+
     def decorator(function):
+
         @wraps(function)
         def wrapper(*args, **kwargs):
 
             if "role" not in session:
                 return redirect(url_for("login"))
 
-            if session["role"] not in roles:
-                return "Access Denied: You are not authorized to perform this action.", 403
+            if session["role"] not in allowed_roles:
+
+                log_action("Unauthorized Access Attempt")
+
+                return """
+                <h2>Access Denied</h2>
+                <p>You are not authorized to access this page.</p>
+                <a href="/dashboard">Back to Dashboard</a>
+                """, 403
 
             return function(*args, **kwargs)
 
@@ -151,111 +186,37 @@ def role_required(*roles):
     return decorator
 
 
-# ---------------------------------------------------------
-# LOGIN PAGE
-# ---------------------------------------------------------
-
-LOGIN_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Secure Question Paper System</title>
-
-    <style>
-        body {
-            font-family: Arial;
-            background: #f2f2f2;
-        }
-
-        .box {
-            width: 400px;
-            margin: 100px auto;
-            padding: 30px;
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 0 10px #aaa;
-        }
-
-        h1 {
-            text-align: center;
-        }
-
-        input, button {
-            width: 100%;
-            padding: 12px;
-            margin: 8px 0;
-            box-sizing: border-box;
-        }
-
-        button {
-            background: #222;
-            color: white;
-            border: none;
-            cursor: pointer;
-        }
-
-        .error {
-            color: red;
-            text-align: center;
-        }
-    </style>
-</head>
-
-<body>
-
-<div class="box">
-
-<h1>Secure Question Paper System</h1>
-
-{% with messages = get_flashed_messages() %}
-    {% for message in messages %}
-        <p class="error">{{ message }}</p>
-    {% endfor %}
-{% endwith %}
-
-<form method="POST">
-
-    <input type="text"
-           name="username"
-           placeholder="Username"
-           required>
-
-    <input type="password"
-           name="password"
-           placeholder="Password"
-           required>
-
-    <button type="submit">
-        Login
-    </button>
-
-</form>
-
-</div>
-
-</body>
-</html>
-"""
-
+# --------------------------------------------------
+# LOGIN
+# --------------------------------------------------
 
 @app.route("/", methods=["GET", "POST"])
 def login():
 
     if request.method == "POST":
 
-        username = request.form["username"]
-        password = request.form["password"]
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
 
         conn = get_db()
 
         user = conn.execute(
-            "SELECT * FROM users WHERE username = ?",
+            """
+            SELECT *
+            FROM users
+            WHERE username = ?
+            """,
             (username,)
         ).fetchone()
 
         conn.close()
 
-        if user and check_password_hash(user["password"], password):
+        if user and check_password_hash(
+            user["password"],
+            password
+        ):
+
+            session.clear()
 
             session["user_id"] = user["id"]
             session["username"] = user["username"]
@@ -265,143 +226,16 @@ def login():
 
             return redirect(url_for("dashboard"))
 
-        flash("Invalid username or password")
+        log_action("Failed Login")
 
-    return render_template_string(LOGIN_HTML)
+        flash("Invalid username or password.")
+
+    return render_template("login.html")
 
 
-# ---------------------------------------------------------
+# --------------------------------------------------
 # DASHBOARD
-# ---------------------------------------------------------
-
-DASHBOARD_HTML = """
-<!DOCTYPE html>
-<html>
-
-<head>
-
-<title>Dashboard</title>
-
-<style>
-
-body {
-    font-family: Arial;
-    margin: 40px;
-    background: #f5f5f5;
-}
-
-.container {
-    background: white;
-    padding: 25px;
-    border-radius: 10px;
-}
-
-a, button {
-    padding: 8px 12px;
-    text-decoration: none;
-}
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 20px;
-}
-
-th, td {
-    border: 1px solid #ccc;
-    padding: 10px;
-}
-
-th {
-    background: #ddd;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="container">
-
-<h1>Secure Question Paper Dashboard</h1>
-
-<p>
-Logged in as:
-<strong>{{ username }}</strong>
-</p>
-
-<p>
-Role:
-<strong>{{ role }}</strong>
-</p>
-
-<a href="/logout">Logout</a>
-
-{% if role in ["Question Setter", "Admin"] %}
-<br><br>
-<a href="/upload">Upload Question Paper</a>
-{% endif %}
-
-{% if role in ["Officer", "Admin"] %}
-<br><br>
-<a href="/admin/papers">Review Question Papers</a>
-{% endif %}
-
-{% if role in ["Controller", "Admin"] %}
-<br><br>
-<a href="/admin/papers">Control Release</a>
-{% endif %}
-
-<h2>Available Question Papers</h2>
-
-<table>
-
-<tr>
-    <th>Title</th>
-    <th>Status</th>
-    <th>Release Time</th>
-    <th>Action</th>
-</tr>
-
-{% for paper in papers %}
-
-<tr>
-
-<td>{{ paper["title"] }}</td>
-
-<td>{{ paper["status"] }}</td>
-
-<td>{{ paper["release_time"] or "Not Scheduled" }}</td>
-
-<td>
-
-{% if paper["status"] == "Released" %}
-
-<a href="/view/{{ paper['id'] }}">View</a>
-
-<a href="/download/{{ paper['id'] }}">Download</a>
-
-{% else %}
-
-Not Released
-
-{% endif %}
-
-</td>
-
-</tr>
-
-{% endfor %}
-
-</table>
-
-</div>
-
-</body>
-</html>
-"""
-
+# --------------------------------------------------
 
 @app.route("/dashboard")
 @login_required
@@ -409,104 +243,27 @@ def dashboard():
 
     conn = get_db()
 
-    papers = conn.execute("""
-        SELECT * FROM papers
+    papers = conn.execute(
+        """
+        SELECT *
+        FROM papers
         ORDER BY id DESC
-    """).fetchall()
+        """
+    ).fetchall()
 
     conn.close()
 
-    return render_template_string(
-        DASHBOARD_HTML,
+    return render_template(
+        "dashboard.html",
         username=session["username"],
         role=session["role"],
         papers=papers
     )
 
 
-# ---------------------------------------------------------
+# --------------------------------------------------
 # UPLOAD QUESTION PAPER
-# ---------------------------------------------------------
-
-UPLOAD_HTML = """
-<!DOCTYPE html>
-<html>
-
-<head>
-
-<title>Upload Question Paper</title>
-
-<style>
-
-body {
-    font-family: Arial;
-    background: #f5f5f5;
-}
-
-.box {
-    width: 500px;
-    margin: 50px auto;
-    background: white;
-    padding: 30px;
-    border-radius: 10px;
-}
-
-input, button {
-    width: 100%;
-    padding: 12px;
-    margin: 10px 0;
-    box-sizing: border-box;
-}
-
-button {
-    background: #222;
-    color: white;
-    border: none;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="box">
-
-<h1>Upload Question Paper</h1>
-
-<form method="POST" enctype="multipart/form-data">
-
-<label>Question Paper Title</label>
-
-<input type="text"
-       name="title"
-       placeholder="Enter paper title"
-       required>
-
-<label>Select Question Paper</label>
-
-<input type="file"
-       name="paper"
-       accept=".pdf"
-       required>
-
-<button type="submit">
-Upload Securely
-</button>
-
-</form>
-
-<br>
-
-<a href="/dashboard">Back to Dashboard</a>
-
-</div>
-
-</body>
-
-</html>
-"""
-
+# --------------------------------------------------
 
 @app.route("/upload", methods=["GET", "POST"])
 @login_required
@@ -515,49 +272,60 @@ def upload():
 
     if request.method == "POST":
 
-        title = request.form["title"]
-
+        title = request.form.get("title", "").strip()
         file = request.files.get("paper")
 
-        if not file or file.filename == "":
-            return "No file selected."
+        if not title:
 
+            flash("Please enter the question paper title.")
+            return redirect(url_for("upload"))
+
+        if not file or file.filename == "":
+
+            flash("Please select a question paper.")
+            return redirect(url_for("upload"))
+
+        # Only PDF files
         if not file.filename.lower().endswith(".pdf"):
-            return "Only PDF files are allowed."
+
+            flash("Only PDF files are allowed.")
+            return redirect(url_for("upload"))
 
         original_name = secure_filename(file.filename)
 
-        # Generate unique storage name
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        timestamp = datetime.now().strftime(
+            "%Y%m%d%H%M%S%f"
+        )
 
-        stored_name = timestamp + "_" + original_name
+        stored_name = (
+            timestamp + "_" + original_name
+        )
 
         filepath = os.path.join(
             UPLOAD_FOLDER,
             stored_name
         )
 
+        # Save file
         file.save(filepath)
 
-        # SHA-256 integrity hash
+        # Generate SHA-256 hash
         sha256 = hashlib.sha256()
 
-        with open(filepath, "rb") as f:
+        with open(filepath, "rb") as uploaded_file:
 
-            while True:
-
-                data = f.read(4096)
-
-                if not data:
-                    break
-
-                sha256.update(data)
+            for block in iter(
+                lambda: uploaded_file.read(4096),
+                b""
+            ):
+                sha256.update(block)
 
         file_hash = sha256.hexdigest()
 
         conn = get_db()
 
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             INSERT INTO papers
             (
                 title,
@@ -569,169 +337,71 @@ def upload():
                 status
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            title,
-            original_name,
-            stored_name,
-            session["user_id"],
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            file_hash,
-            "Pending"
-        ))
+            """,
+            (
+                title,
+                original_name,
+                stored_name,
+                session["user_id"],
+                datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+                file_hash,
+                "Pending"
+            )
+        )
 
         paper_id = cursor.lastrowid
 
         conn.commit()
         conn.close()
 
-        log_action("Question Paper Uploaded", paper_id)
+        log_action(
+            "Question Paper Uploaded",
+            paper_id
+        )
 
         return redirect(url_for("dashboard"))
 
-    return render_template_string(UPLOAD_HTML)
+    return render_template("upload.html")
 
 
-# ---------------------------------------------------------
+# --------------------------------------------------
 # ADMIN / OFFICER PAPER MANAGEMENT
-# ---------------------------------------------------------
-
-ADMIN_HTML = """
-<!DOCTYPE html>
-<html>
-
-<head>
-
-<title>Question Paper Management</title>
-
-<style>
-
-body {
-    font-family: Arial;
-    margin: 40px;
-}
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-th, td {
-    border: 1px solid #ccc;
-    padding: 10px;
-}
-
-th {
-    background: #ddd;
-}
-
-input, button {
-    padding: 8px;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<h1>Question Paper Management</h1>
-
-<p>
-Logged in as {{ username }} ({{ role }})
-</p>
-
-<a href="/dashboard">Dashboard</a>
-
-<table>
-
-<tr>
-    <th>ID</th>
-    <th>Title</th>
-    <th>Status</th>
-    <th>Hash</th>
-    <th>Action</th>
-</tr>
-
-{% for paper in papers %}
-
-<tr>
-
-<td>{{ paper["id"] }}</td>
-
-<td>{{ paper["title"] }}</td>
-
-<td>{{ paper["status"] }}</td>
-
-<td>
-{{ paper["sha256_hash"][:20] }}...
-</td>
-
-<td>
-
-{% if role in ["Officer", "Admin"] and paper["status"] == "Pending" %}
-
-<a href="/approve/{{ paper['id'] }}">
-Approve
-</a>
-
-{% endif %}
-
-{% if role in ["Controller", "Admin"] and paper["status"] == "Approved" %}
-
-<form method="POST"
-      action="/schedule/{{ paper['id'] }}">
-
-<input type="datetime-local"
-       name="release_time"
-       required>
-
-<button type="submit">
-Schedule Release
-</button>
-
-</form>
-
-{% endif %}
-
-</td>
-
-</tr>
-
-{% endfor %}
-
-</table>
-
-</body>
-
-</html>
-"""
-
+# --------------------------------------------------
 
 @app.route("/admin/papers")
 @login_required
-@role_required("Officer", "Controller", "Admin")
+@role_required(
+    "Officer",
+    "Controller",
+    "Admin"
+)
 def admin_papers():
 
     conn = get_db()
 
-    papers = conn.execute("""
-        SELECT * FROM papers
+    papers = conn.execute(
+        """
+        SELECT *
+        FROM papers
         ORDER BY id DESC
-    """).fetchall()
+        """
+    ).fetchall()
 
     conn.close()
 
-    return render_template_string(
-        ADMIN_HTML,
+    return render_template(
+        "admin_papers.html",
         username=session["username"],
         role=session["role"],
         papers=papers
     )
 
 
-# ---------------------------------------------------------
+# --------------------------------------------------
 # APPROVE QUESTION PAPER
-# ---------------------------------------------------------
+# --------------------------------------------------
 
 @app.route("/approve/<int:paper_id>")
 @login_required
@@ -740,58 +410,61 @@ def approve(paper_id):
 
     conn = get_db()
 
-    conn.execute("""
+    paper = conn.execute(
+        "SELECT * FROM papers WHERE id = ?",
+        (paper_id,)
+    ).fetchone()
+
+    if not paper:
+
+        conn.close()
+        return "Question paper not found.", 404
+
+    if paper["status"] != "Pending":
+
+        conn.close()
+        return "Only pending papers can be approved.", 400
+
+    conn.execute(
+        """
         UPDATE papers
         SET status = 'Approved'
         WHERE id = ?
-    """, (paper_id,))
+        """,
+        (paper_id,)
+    )
 
     conn.commit()
     conn.close()
 
-    log_action("Question Paper Approved", paper_id)
+    log_action(
+        "Question Paper Approved",
+        paper_id
+    )
 
     return redirect(url_for("admin_papers"))
 
 
-# ---------------------------------------------------------
+# --------------------------------------------------
 # SCHEDULE RELEASE
-# ---------------------------------------------------------
+# --------------------------------------------------
 
-@app.route("/schedule/<int:paper_id>", methods=["POST"])
+@app.route(
+    "/schedule/<int:paper_id>",
+    methods=["POST"]
+)
 @login_required
 @role_required("Controller", "Admin")
 def schedule(paper_id):
 
-    release_time = request.form["release_time"]
+    release_time = request.form.get(
+        "release_time",
+        ""
+    )
 
-    conn = get_db()
+    if not release_time:
 
-    conn.execute("""
-        UPDATE papers
-        SET release_time = ?,
-            status = 'Scheduled'
-        WHERE id = ?
-    """, (
-        release_time,
-        paper_id
-    ))
-
-    conn.commit()
-    conn.close()
-
-    log_action("Question Paper Release Scheduled", paper_id)
-
-    return redirect(url_for("admin_papers"))
-
-
-# ---------------------------------------------------------
-# VIEW QUESTION PAPER
-# ---------------------------------------------------------
-
-@app.route("/view/<int:paper_id>")
-@login_required
-def view_paper(paper_id):
+        return "Release time is required.", 400
 
     conn = get_db()
 
@@ -800,41 +473,100 @@ def view_paper(paper_id):
         (paper_id,)
     ).fetchone()
 
+    if not paper:
+
+        conn.close()
+        return "Question paper not found.", 404
+
+    if paper["status"] != "Approved":
+
+        conn.close()
+        return "Only approved papers can be scheduled.", 400
+
+    conn.execute(
+        """
+        UPDATE papers
+        SET release_time = ?,
+            status = 'Scheduled'
+        WHERE id = ?
+        """,
+        (
+            release_time,
+            paper_id
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+    log_action(
+        "Question Paper Release Scheduled",
+        paper_id
+    )
+
+    return redirect(url_for("admin_papers"))
+
+
+# --------------------------------------------------
+# CHECK RELEASE TIME
+# --------------------------------------------------
+
+def is_released(paper):
+
+    if not paper["release_time"]:
+        return False
+
+    try:
+
+        release_time = datetime.fromisoformat(
+            paper["release_time"]
+        )
+
+        return datetime.now() >= release_time
+
+    except ValueError:
+
+        return False
+
+
+# --------------------------------------------------
+# VIEW QUESTION PAPER
+# --------------------------------------------------
+
+@app.route("/view/<int:paper_id>")
+@login_required
+def view_paper(paper_id):
+
+    conn = get_db()
+
+    paper = conn.execute(
+        """
+        SELECT *
+        FROM papers
+        WHERE id = ?
+        """,
+        (paper_id,)
+    ).fetchone()
+
     conn.close()
 
     if not paper:
+
         return "Question paper not found.", 404
 
-    # Check release time
-    if not paper["release_time"]:
-        return "Question paper has not been released yet.", 403
-
-    release_time = datetime.fromisoformat(
-        paper["release_time"]
-    )
-
-    if datetime.now() < release_time:
+    # Controlled release check
+    if not is_released(paper):
 
         log_action(
-            "Unauthorized Pre-Release Access Attempt",
+            "Pre-Release Access Attempt",
             paper_id
         )
 
-        return "Access Denied: Question paper has not been released.", 403
-
-    # Automatically mark as released
-    if paper["status"] != "Released":
-
-        conn = get_db()
-
-        conn.execute("""
-            UPDATE papers
-            SET status = 'Released'
-            WHERE id = ?
-        """, (paper_id,))
-
-        conn.commit()
-        conn.close()
+        return """
+        <h2>Access Denied</h2>
+        <p>The question paper has not been released yet.</p>
+        <a href="/dashboard">Back to Dashboard</a>
+        """, 403
 
     filepath = os.path.join(
         UPLOAD_FOLDER,
@@ -842,7 +574,50 @@ def view_paper(paper_id):
     )
 
     if not os.path.exists(filepath):
-        return "File not found.", 404
+
+        return "Question paper file not found.", 404
+
+    # Verify integrity
+    sha256 = hashlib.sha256()
+
+    with open(filepath, "rb") as file:
+
+        for block in iter(
+            lambda: file.read(4096),
+            b""
+        ):
+            sha256.update(block)
+
+    current_hash = sha256.hexdigest()
+
+    if current_hash != paper["sha256_hash"]:
+
+        log_action(
+            "Integrity Verification Failed",
+            paper_id
+        )
+
+        return """
+        <h2>Security Alert</h2>
+        <p>
+        Question paper integrity verification failed.
+        </p>
+        """, 500
+
+    # Update status
+    conn = get_db()
+
+    conn.execute(
+        """
+        UPDATE papers
+        SET status = 'Released'
+        WHERE id = ?
+        """,
+        (paper_id,)
+    )
+
+    conn.commit()
+    conn.close()
 
     log_action(
         "Question Paper Viewed",
@@ -852,9 +627,9 @@ def view_paper(paper_id):
     return send_file(filepath)
 
 
-# ---------------------------------------------------------
+# --------------------------------------------------
 # DOWNLOAD QUESTION PAPER
-# ---------------------------------------------------------
+# --------------------------------------------------
 
 @app.route("/download/<int:paper_id>")
 @login_required
@@ -863,30 +638,33 @@ def download(paper_id):
     conn = get_db()
 
     paper = conn.execute(
-        "SELECT * FROM papers WHERE id = ?",
+        """
+        SELECT *
+        FROM papers
+        WHERE id = ?
+        """,
         (paper_id,)
     ).fetchone()
 
     conn.close()
 
     if not paper:
+
         return "Question paper not found.", 404
 
-    if not paper["release_time"]:
-        return "Question paper has not been released.", 403
-
-    release_time = datetime.fromisoformat(
-        paper["release_time"]
-    )
-
-    if datetime.now() < release_time:
+    # Controlled release
+    if not is_released(paper):
 
         log_action(
-            "Unauthorized Download Attempt",
+            "Pre-Release Download Attempt",
             paper_id
         )
 
-        return "Download denied: Question paper has not been released.", 403
+        return """
+        <h2>Download Denied</h2>
+        <p>The question paper has not been released.</p>
+        <a href="/dashboard">Back to Dashboard</a>
+        """, 403
 
     filepath = os.path.join(
         UPLOAD_FOLDER,
@@ -894,44 +672,7 @@ def download(paper_id):
     )
 
     if not os.path.exists(filepath):
-        return "File not found.", 404
 
-    log_action(
-        "Question Paper Downloaded",
-        paper_id
-    )
+        return "Question paper file not found.", 404
 
-    return send_file(
-        filepath,
-        as_attachment=True,
-        download_name=paper["filename"]
-    )
-
-
-# ---------------------------------------------------------
-# LOGOUT
-# ---------------------------------------------------------
-
-@app.route("/logout")
-def logout():
-
-    log_action("Logout")
-
-    session.clear()
-
-    return redirect(url_for("login"))
-
-
-# ---------------------------------------------------------
-# START APPLICATION
-# ---------------------------------------------------------
-
-if _name_ == "_main_":
-
-    init_db()
-
-    app.run(
-        debug=True,
-        host="127.0.0.1",
-        port=5000
-    )
+    # Integrity
