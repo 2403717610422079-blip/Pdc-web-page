@@ -251,6 +251,30 @@ def dashboard():
         """
     ).fetchall()
 
+    # Check scheduled papers
+    for paper in papers:
+        if paper["status"] == "Scheduled" and paper["release_time"]:
+            if is_released(paper["release_time"]):
+                conn.execute(
+                    """
+                    UPDATE papers
+                    SET status = 'Released'
+                    WHERE id = ?
+                    """,
+                    (paper["id"],)
+                )
+
+    conn.commit()
+
+    # Fetch updated papers
+    papers = conn.execute(
+        """
+        SELECT *
+        FROM papers
+        ORDER BY id DESC
+        """
+    ).fetchall()
+
     conn.close()
 
     return render_template(
@@ -259,8 +283,6 @@ def dashboard():
         role=session["role"],
         papers=papers
     )
-
-
 # --------------------------------------------------
 # UPLOAD QUESTION PAPER
 # --------------------------------------------------
