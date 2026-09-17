@@ -1,5 +1,11 @@
-from flask import Flask, request, redirect, url_for, session, send_file, render_template, flash
-from werkzeug.security import generate_password_hash, check_password_hash
+
+from flask import (
+    Flask, request, redirect, url_for, session,
+    send_file, render_template, flash
+)
+from werkzeug.security import (
+    generate_password_hash, check_password_hash
+)
 from werkzeug.utils import secure_filename
 from functools import wraps
 from datetime import datetime
@@ -18,8 +24,10 @@ app.secret_key = os.environ.get(
     "secure-question-paper-secret-key"
 )
 
-DATABASE = "question_paper.db"
-UPLOAD_FOLDER = "secure_papers"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DATABASE = os.path.join(BASE_DIR, "question_paper.db")
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "secure_papers")
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -75,7 +83,6 @@ def init_db():
         )
     """)
 
-    # Demo accounts
     demo_users = [
         ("admin", "admin123", "Admin"),
         ("setter", "setter123", "Question Setter"),
@@ -92,7 +99,6 @@ def init_db():
         ).fetchone()
 
         if not existing:
-
             conn.execute(
                 """
                 INSERT INTO users
@@ -195,7 +201,10 @@ def login():
 
     if request.method == "POST":
 
-        username = request.form.get("username", "").strip()
+        username = request.form.get(
+            "username", ""
+        ).strip()
+
         password = request.form.get("password", "")
 
         conn = get_db()
@@ -226,56 +235,91 @@ def login():
 
             return redirect(url_for("dashboard"))
 
-        log_action("Failed Login")
-
         flash("Invalid username or password.")
 
     return render_template("login.html")
 
 
 # --------------------------------------------------
-# DASHBOARD
+# CHECK RELEASE TIME
 # --------------------------------------------------
 
+def is_released(paper):
 
-@app.route("/dashboard")
-@login_required
-def dashboard():
+    if not paper["release_time"]:
+        return False
+
+    try:
+        release_time = datetime.fromisoformat(
+            paper["release_time"]
+        )
+
+        # Compare using PythonAnywhere server time
+        now = datetime.now()
+
+        return now >= release_time
+
+    except (ValueError, TypeError):
+        return False
+
+
+# --------------------------------------------------
+# AUTOMATIC STATUS UPDATE
+# --------------------------------------------------
+
+def update_released_papers():
 
     conn = get_db()
 
     papers = conn.execute(
         """
-        SELECT *
+        SELECT id, status, release_time
         FROM papers
-        ORDER BY id DESC
+        WHERE status = 'Scheduled'
         """
     ).fetchall()
 
-    # Automatically release scheduled papers
+    released_ids = []
+
     for paper in papers:
 
-        if paper["status"] == "Scheduled":
+        if is_released(paper):
 
-            if is_released(paper):
+            conn.execute(
+                """
+                UPDATE papers
+                SET status = 'Released'
+                WHERE id = ?
+                  AND status = 'Scheduled'
+                """,
+                (paper["id"],)
+            )
 
-                conn.execute(
-                    """
-                    UPDATE papers
-                    SET status = 'Released'
-                    WHERE id = ?
-                    """,
-                    (paper["id"],)
-                )
-
-                log_action(
-                    "Question Paper Released",
-                    paper["id"]
-                )
+            if conn.total_changes:
+                released_ids.append(paper["id"])
 
     conn.commit()
+    conn.close()
 
-    # Get updated papers
+    for paper_id in released_ids:
+        log_action(
+            "Question Paper Released",
+            paper_id
+        )
+
+
+# --------------------------------------------------
+# DASHBOARD
+# --------------------------------------------------
+
+@app.route("/dashboard")
+@login_required
+def dashboard():
+
+    update_released_papers()
+
+    conn = get_db()
+
     papers = conn.execute(
         """
         SELECT *
@@ -292,6 +336,8 @@ def dashboard():
         role=session["role"],
         papers=papers
     )
+
+
 # --------------------------------------------------
 # UPLOAD QUESTION PAPER
 # --------------------------------------------------
@@ -303,48 +349,46 @@ def upload():
 
     if request.method == "POST":
 
-        title = request.form.get("title", "").strip()
+        title = request.form.get(
+            "title", ""
+        ).strip()
+
         file = request.files.get("paper")
 
         if not title:
-
             flash("Please enter the question paper title.")
             return redirect(url_for("upload"))
 
         if not file or file.filename == "":
-
             flash("Please select a question paper.")
             return redirect(url_for("upload"))
 
-        # Only PDF files
         if not file.filename.lower().endswith(".pdf"):
-
             flash("Only PDF files are allowed.")
             return redirect(url_for("upload"))
 
         original_name = secure_filename(file.filename)
 
+        if not original_name:
+            flash("Invalid filename.")
+            return redirect(url_for("upload"))
+
         timestamp = datetime.now().strftime(
             "%Y%m%d%H%M%S%f"
         )
 
-        stored_name = (
-            timestamp + "_" + original_name
-        )
+        stored_name = timestamp + "_" + original_name
 
         filepath = os.path.join(
             UPLOAD_FOLDER,
             stored_name
         )
 
-        # Save file
         file.save(filepath)
 
-        # Generate SHA-256 hash
         sha256 = hashlib.sha256()
 
         with open(filepath, "rb") as uploaded_file:
-
             for block in iter(
                 lambda: uploaded_file.read(4096),
                 b""
@@ -357,8 +401,7 @@ def upload():
 
         cursor = conn.execute(
             """
-            INSERT INTO papers
-            (
+            INSERT INTO papers (
                 title,
                 filename,
                 stored_filename,
@@ -392,6 +435,8 @@ def upload():
             paper_id
         )
 
+        flash("Question paper uploaded successfully.")
+
         return redirect(url_for("dashboard"))
 
     return render_template("upload.html")
@@ -409,6 +454,8 @@ def upload():
     "Admin"
 )
 def admin_papers():
+
+    update_released_papers()
 
     conn = get_db()
 
@@ -447,12 +494,10 @@ def approve(paper_id):
     ).fetchone()
 
     if not paper:
-
         conn.close()
         return "Question paper not found.", 404
 
     if paper["status"] != "Pending":
-
         conn.close()
         return "Only pending papers can be approved.", 400
 
@@ -473,6 +518,8 @@ def approve(paper_id):
         paper_id
     )
 
+    flash("Question paper approved.")
+
     return redirect(url_for("admin_papers"))
 
 
@@ -489,13 +536,21 @@ def approve(paper_id):
 def schedule(paper_id):
 
     release_time = request.form.get(
-        "release_time",
-        ""
-    )
+        "release_time", ""
+    ).strip()
 
     if not release_time:
-
         return "Release time is required.", 400
+
+    try:
+        parsed_time = datetime.fromisoformat(release_time)
+    except (ValueError, TypeError):
+        return "Invalid release time format.", 400
+
+    # Store a consistent local datetime string
+    release_time = parsed_time.strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
 
     conn = get_db()
 
@@ -505,12 +560,10 @@ def schedule(paper_id):
     ).fetchone()
 
     if not paper:
-
         conn.close()
         return "Question paper not found.", 404
 
     if paper["status"] != "Approved":
-
         conn.close()
         return "Only approved papers can be scheduled.", 400
 
@@ -535,29 +588,9 @@ def schedule(paper_id):
         paper_id
     )
 
+    flash("Question paper release scheduled.")
+
     return redirect(url_for("admin_papers"))
-
-
-# --------------------------------------------------
-# CHECK RELEASE TIME
-# --------------------------------------------------
-
-def is_released(paper):
-
-    if not paper["release_time"]:
-        return False
-
-    try:
-
-        release_time = datetime.fromisoformat(
-            paper["release_time"]
-        )
-
-        return datetime.now() >= release_time
-
-    except (ValueError,TypeError):
-
-        return False
 
 
 # --------------------------------------------------
@@ -567,6 +600,9 @@ def is_released(paper):
 @app.route("/view/<int:paper_id>")
 @login_required
 def view_paper(paper_id):
+
+    # Update any papers whose scheduled time has passed
+    update_released_papers()
 
     conn = get_db()
 
@@ -582,12 +618,9 @@ def view_paper(paper_id):
     conn.close()
 
     if not paper:
-
         return "Question paper not found.", 404
 
-    # Controlled release check
     if not is_released(paper):
-
         log_action(
             "Pre-Release Access Attempt",
             paper_id
@@ -605,14 +638,11 @@ def view_paper(paper_id):
     )
 
     if not os.path.exists(filepath):
-
         return "Question paper file not found.", 404
 
-    # Verify integrity
     sha256 = hashlib.sha256()
 
     with open(filepath, "rb") as file:
-
         for block in iter(
             lambda: file.read(4096),
             b""
@@ -630,12 +660,9 @@ def view_paper(paper_id):
 
         return """
         <h2>Security Alert</h2>
-        <p>
-        Question paper integrity verification failed.
-        </p>
+        <p>Question paper integrity verification failed.</p>
         """, 500
 
-    # Update status
     conn = get_db()
 
     conn.execute(
@@ -655,7 +682,11 @@ def view_paper(paper_id):
         paper_id
     )
 
-    return send_file(filepath)
+    return send_file(
+        filepath,
+        as_attachment=False,
+        download_name=paper["filename"]
+    )
 
 
 # --------------------------------------------------
@@ -665,6 +696,9 @@ def view_paper(paper_id):
 @app.route("/download/<int:paper_id>")
 @login_required
 def download(paper_id):
+
+    # Update scheduled papers before checking access
+    update_released_papers()
 
     conn = get_db()
 
@@ -680,10 +714,8 @@ def download(paper_id):
     conn.close()
 
     if not paper:
-
         return "Question paper not found.", 404
 
-    # Controlled release
     if not is_released(paper):
 
         log_action(
@@ -703,7 +735,78 @@ def download(paper_id):
     )
 
     if not os.path.exists(filepath):
-
         return "Question paper file not found.", 404
 
-    # Integrity
+    # Integrity verification
+    sha256 = hashlib.sha256()
+
+    with open(filepath, "rb") as file:
+        for block in iter(
+            lambda: file.read(4096),
+            b""
+        ):
+            sha256.update(block)
+
+    current_hash = sha256.hexdigest()
+
+    if current_hash != paper["sha256_hash"]:
+
+        log_action(
+            "Integrity Verification Failed",
+            paper_id
+        )
+
+        return """
+        <h2>Security Alert</h2>
+        <p>Question paper integrity verification failed.</p>
+        """, 500
+
+    conn = get_db()
+
+    conn.execute(
+        """
+        UPDATE papers
+        SET status = 'Released'
+        WHERE id = ?
+        """,
+        (paper_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+    log_action(
+        "Question Paper Downloaded",
+        paper_id
+    )
+
+    return send_file(
+        filepath,
+        as_attachment=True,
+        download_name=paper["filename"]
+    )
+
+
+# --------------------------------------------------
+# LOGOUT
+# --------------------------------------------------
+
+@app.route("/logout")
+@login_required
+def logout():
+
+    log_action("User Logged Out")
+
+    session.clear()
+
+    return redirect(url_for("login"))
+
+
+# --------------------------------------------------
+# RUN APPLICATION
+# --------------------------------------------------
+
+init_db()
+
+if __name__ == "__main__":
+    app.run(debug=True)
