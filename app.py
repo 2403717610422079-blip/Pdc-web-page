@@ -546,7 +546,7 @@ def is_released(paper):
 
         return datetime.now() >= release_time
 
-    except ValueError:
+    except (ValueError,TypeError):
 
         return False
 
