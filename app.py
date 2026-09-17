@@ -237,6 +237,7 @@ def login():
 # DASHBOARD
 # --------------------------------------------------
 
+
 @app.route("/dashboard")
 @login_required
 def dashboard():
@@ -251,10 +252,13 @@ def dashboard():
         """
     ).fetchall()
 
-    # Check scheduled papers
+    # Automatically release scheduled papers
     for paper in papers:
-        if paper["status"] == "Scheduled" and paper["release_time"]:
-            if is_released(paper["release_time"]):
+
+        if paper["status"] == "Scheduled":
+
+            if is_released(paper):
+
                 conn.execute(
                     """
                     UPDATE papers
@@ -264,9 +268,14 @@ def dashboard():
                     (paper["id"],)
                 )
 
+                log_action(
+                    "Question Paper Released",
+                    paper["id"]
+                )
+
     conn.commit()
 
-    # Fetch updated papers
+    # Get updated papers
     papers = conn.execute(
         """
         SELECT *
